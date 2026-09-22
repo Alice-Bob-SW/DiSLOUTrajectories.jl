@@ -72,8 +72,6 @@ makedocs(;
     ],
 )
 
-write(joinpath(@__DIR__, "build", "robots.txt"), "User-agent: *\nDisallow: /\n")
-
 if get(ENV, "DOCUMENTER_DEPLOY", "false") == "true"
     Documenter.deploydocs(;
         repo = "github.com/$(repository).git",
