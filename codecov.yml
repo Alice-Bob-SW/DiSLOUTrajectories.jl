@@ -1,0 +1,11 @@
+coverage:
+  status:
+    project:
+      default:
+        threshold: 1%
+    patch:
+      default:
+        # fixed target, not `auto`. `auto` compares a diff against
+        # whole-project coverage, so a one-line trivial commit fails the gate.
+        target: 70%
+        threshold: 5%

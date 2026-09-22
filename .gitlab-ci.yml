@@ -1,0 +1,205 @@
+default:
+  image: julia:1.10
+  tags:
+    - all
+  interruptible: true
+  before_script:
+    - |
+      echo "machine $CI_SERVER_HOST
+          login gitlab-ci-token
+          password $CI_JOB_TOKEN" >> ~/.netrc
+      chmod 600 ~/.netrc
+
+variables:
+  JULIA_DEPOT_PATH: "$CI_PROJECT_DIR/.julia"
+  JULIA_NUM_THREADS: "4"
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "schedule" || $CI_PIPELINE_SOURCE == "web"'
+    - when: never
+
+cache:
+  key: julia-pkg-cache
+  paths:
+    - .julia/artifacts/
+    - .julia/compiled/
+    - .julia/packages/
+    - .julia/registries/
+
+stages:
+  - test
+  - extended
+  - docs
+  - deploy
+
+.ordinary:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule" || $CI_PIPELINE_SOURCE == "web"'
+
+.extended:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" || $CI_PIPELINE_SOURCE == "web"'
+
+format:
+  extends: .ordinary
+  image: julia:1
+  stage: test
+  script:
+    - apt-get update && apt-get install -y --no-install-recommends git
+    - julia --project=@runic --startup-file=no -e 'using Pkg; Pkg.add(PackageSpec(name="Runic", version="1"))'
+    - git ls-files -z -- '*.jl' | xargs -0 julia --project=@runic --startup-file=no -m Runic --check --diff
+
+code_quality:
+  extends: .ordinary
+  image: julia:$JULIA_VERSION
+  stage: test
+  parallel:
+    matrix:
+      - JULIA_VERSION: ["1.10", "1"]
+  script:
+    - |
+      julia --project=test/code-quality --startup-file=no -e '
+        using Pkg
+        Pkg.develop(PackageSpec(path=pwd()))
+        Pkg.instantiate()
+      '
+    - julia --project=test/code-quality --startup-file=no test/code-quality/runtests.jl
+
+test:
+  extends: .ordinary
+  stage: test
+  script:
+    - julia --project=. -e 'using Pkg; Pkg.add(PackageSpec(name="QuantumToolbox", version="0.47.0")); Pkg.instantiate()'
+    - julia --project=. --startup-file=no -e 'using Pkg; Pkg.test()'
+
+core_import:
+  extends: .extended
+  stage: extended
+  script:
+    - |
+      julia --startup-file=no --project=@stdlib -e '
+        using Pkg
+        Pkg.activate(mktempdir())
+        Pkg.develop(PackageSpec(path=pwd()))
+        Pkg.instantiate()
+        using DiSLOUTrajectories
+        @assert Base.get_extension(
+            DiSLOUTrajectories, :DiSLOUTrajectoriesClusteringExt) === nothing
+        @assert Base.get_extension(
+            DiSLOUTrajectories, :DiSLOUTrajectoriesQuantumCumulantsExt) === nothing
+        loaded = Set(pkg.name for pkg in keys(Base.loaded_modules))
+        @assert "Clustering" ∉ loaded
+        @assert "Distances" ∉ loaded
+        @assert "QuantumCumulants" ∉ loaded
+        @assert "ModelingToolkitBase" ∉ loaded
+        trajectory_error = try
+            DiSLOUTrajectories._cluster_terminal_means(zeros(ComplexF64, 1, 0);
+                cluster_scales = [1.0], dbscan_radius = 1.5,
+                min_neighbors = 1, min_weight = 0.0)
+            nothing
+        catch caught
+            caught
+        end
+        @assert trajectory_error isa ArgumentError
+        @assert occursin("Clustering", sprint(showerror, trajectory_error))
+      '
+
+extension:
+  extends: .ordinary
+  image: julia:1
+  stage: test
+  variables:
+    EXTENSION_ENV: "$CI_PROJECT_DIR/.extension"
+  script:
+    - |
+      julia --project=@stdlib -e '
+        using Pkg
+        Pkg.activate(ENV["EXTENSION_ENV"])
+        Pkg.develop(PackageSpec(path=pwd()))
+        Pkg.add([
+          PackageSpec(name="QuantumToolbox", version="0.47"),
+          PackageSpec(name="Clustering", version="0.15"),
+          PackageSpec(name="QuantumCumulants", version="0.7"),
+          PackageSpec(name="ModelingToolkitBase", version="1.36"),
+        ])
+        Pkg.instantiate()
+      '
+    - |
+      julia --project="$EXTENSION_ENV" --startup-file=no -e '
+        include("test/testsetup.jl")
+        include("test/test_clustering_accuracy.jl")
+        include("test/test_gauge_discovery_trajectories.jl")
+        include("test/test_semiclassical.jl")
+      '
+
+cuda:
+  extends: .ordinary
+  image: julia:1
+  stage: test
+  script:
+    - |
+      julia --project=test -e '
+        using Pkg
+        Pkg.develop(PackageSpec(path=pwd()))
+        Pkg.instantiate()
+      '
+    - |
+      julia --project=test --startup-file=no -e '
+        include("test/testsetup.jl")
+        include("test/test_cuda_extension.jl")
+      '
+
+distributed:
+  extends: .ordinary
+  image: julia:1
+  stage: test
+  script:
+    - |
+      julia --project=test -e '
+        using Pkg
+        Pkg.develop(PackageSpec(path=pwd()))
+        Pkg.instantiate()
+      '
+    - |
+      julia --project=test --startup-file=no -e '
+        include("test/testsetup.jl")
+        include("test/test_distributed.jl")
+      '
+
+docs:
+  image: julia:1
+  stage: docs
+  script:
+    - |
+      julia --project=docs -e '
+        using Pkg
+        Pkg.develop(PackageSpec(path=pwd()))
+        Pkg.instantiate()
+      '
+    - julia --project=docs --startup-file=no docs/make.jl
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+
+pages:
+  image: julia:1
+  stage: deploy
+  script:
+    - |
+      julia --project=docs -e '
+        using Pkg
+        Pkg.develop(PackageSpec(path=pwd()))
+        Pkg.instantiate()
+      '
+    - julia --project=docs --startup-file=no docs/make.jl
+    - mv docs/build public
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"'

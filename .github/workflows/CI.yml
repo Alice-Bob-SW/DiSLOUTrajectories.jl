@@ -1,0 +1,351 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run the full platform and extension suite
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  core-import:
+    name: Core-only import
+    if: github.event_name == 'schedule' || inputs.full
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.10'
+      - uses: julia-actions/cache@v3
+      - name: Import without optional weak dependencies
+        run: |
+          julia --code-coverage=@. --startup-file=no --project=@stdlib -e '
+            using Pkg
+            Pkg.activate(mktempdir())
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.add(PackageSpec(name="TestReports", version="1.4"))
+            Pkg.instantiate()
+            append!(ARGS, ["test/core_import.jl"])
+            include("test/junit.jl")
+          '
+      - uses: julia-actions/julia-processcoverage@v1
+        with:
+          directories: src,ext
+      - uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('junit.xml') != '' }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: junit.xml
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
+
+  test:
+    name: Julia ${{ matrix.julia }} / ${{ matrix.os }} / QuantumToolbox ${{ matrix.qt }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - julia: '1.10'
+            os: ubuntu-latest
+            arch: x64
+            qt: '0.47.0'
+            coverage: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: ${{ matrix.julia }}
+          arch: ${{ matrix.arch }}
+      - uses: julia-actions/cache@v3
+      - name: Select QuantumToolbox compatibility target
+        run: |
+          julia --project=. -e '
+            using Pkg
+            Pkg.add([
+              PackageSpec(name="QuantumToolbox", version="${{ matrix.qt }}"),
+              PackageSpec(name="TestReports", version="1.4"),
+            ])
+          '
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Run package tests with JUnit reporting
+        run: >-
+          julia --code-coverage=${{ matrix.coverage && 'user' || 'none' }}
+          --project=. --startup-file=no test/junit.jl --package
+        env:
+          JULIA_NUM_THREADS: 4
+      - uses: julia-actions/julia-processcoverage@v1
+        if: matrix.coverage
+        with:
+          directories: src,ext
+      - uses: codecov/codecov-action@v7
+        if: matrix.coverage
+        with:
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('junit.xml') != '' }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: junit.xml
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
+
+  test-full:
+    name: Julia ${{ matrix.julia }} / ${{ matrix.os }} / QuantumToolbox ${{ matrix.qt }}
+    if: github.event_name == 'schedule' || inputs.full
+    runs-on: ${{ matrix.os }}
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - julia: '1'
+            os: ubuntu-latest
+            arch: x64
+            qt: '0.47'
+            coverage: true
+          - julia: '1.10'
+            os: windows-latest
+            arch: x64
+            qt: '0.47'
+            coverage: false
+          - julia: '1'
+            os: windows-latest
+            arch: x64
+            qt: '0.47'
+            coverage: false
+          - julia: '1'
+            os: macos-latest
+            arch: arm64
+            qt: '0.47'
+            coverage: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: ${{ matrix.julia }}
+          arch: ${{ matrix.arch }}
+      - uses: julia-actions/cache@v3
+      - name: Install AppleAccelerate in an isolated macOS environment
+        if: runner.os == 'macOS'
+        shell: julia --startup-file=no --project=@stdlib {0}
+        run: |
+          using Pkg
+          environment = mktempdir(; cleanup=false)
+          Pkg.activate(environment)
+          Pkg.add(PackageSpec(name="AppleAccelerate", version="0.7"))
+          open(ENV["GITHUB_ENV"], "a") do io
+              println(io, "DISLOU_APPLE_ACCELERATE_ENV=", environment)
+          end
+      - name: Select QuantumToolbox compatibility target
+        run: |
+          julia --project=. -e '
+            using Pkg
+            Pkg.add([
+              PackageSpec(name="QuantumToolbox", version="${{ matrix.qt }}"),
+              PackageSpec(name="TestReports", version="1.4"),
+            ])
+          '
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Run package tests with JUnit reporting
+        run: >-
+          julia --code-coverage=${{ matrix.coverage && 'user' || 'none' }}
+          --project=. --startup-file=no test/junit.jl --package
+        env:
+          JULIA_NUM_THREADS: 4
+      - uses: julia-actions/julia-processcoverage@v1
+        if: matrix.coverage
+        with:
+          directories: src,ext
+      - uses: codecov/codecov-action@v7
+        if: matrix.coverage
+        with:
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('junit.xml') != '' }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: junit.xml
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
+
+  extension:
+    name: Clustering and semiclassical extensions / 4 threads
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Add optional extension dependencies
+        env:
+          EXTENSION_ENV: ${{ runner.temp }}/dislou-extension
+        run: |
+          julia --project=@stdlib -e '
+            using Pkg
+            Pkg.activate(ENV["EXTENSION_ENV"])
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.add([
+              PackageSpec(name="QuantumToolbox", version="0.47"),
+              PackageSpec(name="Clustering", version="0.15"),
+              PackageSpec(name="QuantumCumulants", version="0.7"),
+              PackageSpec(name="ModelingToolkitBase", version="1.36"),
+              PackageSpec(name="TestReports", version="1.4"),
+            ])
+            Pkg.instantiate()
+          '
+      - name: Run focused extension checks
+        env:
+          EXTENSION_ENV: ${{ runner.temp }}/dislou-extension
+          JULIA_NUM_THREADS: 4
+        run: >-
+          julia --code-coverage=@. --project="$EXTENSION_ENV" --startup-file=no
+          test/junit.jl test/testsetup.jl test/test_clustering_accuracy.jl
+          test/test_gauge_discovery_trajectories.jl test/test_semiclassical.jl
+      - uses: julia-actions/julia-processcoverage@v1
+        with:
+          directories: src,ext
+      - uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('junit.xml') != '' }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: junit.xml
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
+
+  cuda:
+    name: CUDA extension (GPU optional)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Develop checkout in test environment
+        run: |
+          julia --project=test -e '
+            using Pkg
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.instantiate()
+          '
+      - name: Run conditional CUDA checks
+        run: >-
+          julia --code-coverage=@. --project=test --startup-file=no
+          test/junit.jl test/testsetup.jl test/test_cuda_extension.jl
+      - uses: julia-actions/julia-processcoverage@v1
+        with:
+          directories: src,ext
+      - uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('junit.xml') != '' }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: junit.xml
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
+
+  distributed:
+    name: Distributed indexed trajectories
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Develop checkout in test environment
+        run: |
+          julia --project=test -e '
+            using Pkg
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.instantiate()
+          '
+      - name: Run real worker checks
+        run: >-
+          julia --code-coverage=@. --project=test --startup-file=no
+          test/junit.jl test/testsetup.jl test/test_distributed.jl
+      - uses: julia-actions/julia-processcoverage@v1
+        with:
+          directories: src,ext
+      - uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('junit.xml') != '' }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: junit.xml
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
