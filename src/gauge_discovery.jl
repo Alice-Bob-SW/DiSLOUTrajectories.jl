@@ -141,6 +141,51 @@ function _shifted_problem(H, C::AbstractVector, shifts::AbstractVector{<:Tuple})
         [QuantumObject(cdata[i]; dims = C[i].dimensions) for i in eachindex(cdata)]
 end
 
+# Workers under ensemblealg=:distributed deserialize the pilot closure, so it and
+# its runner must live in the core module: workers need not load Clustering.
+function _run_discovery_indices(f, nseeds::Int, ensemblealg::Symbol)
+    results = Vector{Any}(undef, nseeds)
+    if ensemblealg === :distributed
+        for (index, result) in pmap(index -> (index, f(index)), 1:nseeds)
+            results[index] = result
+        end
+    elseif ensemblealg === :threads && Threads.nthreads() > 1
+        nchunks = max(1, min(2 * Threads.nthreads(), nseeds))
+        @sync for indices in _chunk_ranges(nseeds, nchunks)
+            Threads.@spawn for index in indices
+                results[index] = f(index)
+            end
+        end
+    else
+        for index in 1:nseeds
+            results[index] = f(index)
+        end
+    end
+    return results
+end
+
+_mean(x) = sum(x) / length(x)
+
+# Paper: ᾱ_j^(r) and terminal ⟨C_μ⟩ averages (Eqs. A.7–A.8).
+function _preliminary_pilot_results(
+        Hrun, Crun, e_ops, tlist, tail, amplitudes, mode_dims, seed, nsave, ensemblealg
+    )
+    nmodes, nseeds = size(amplitudes)
+    # QuantumToolbox's retained-run keyword predates DiSLOUTrajectories.
+    pilot_storage = (; Symbol("keep_" * "runs_results") => Val(true))
+    relax = function (point)
+        psi0 = tensor((coherent(Int(mode_dims[mode]), amplitudes[mode, point]) for mode in 1:nmodes)...)
+        sol = mcsolve(
+            Hrun, psi0, tlist, Crun; e_ops, ntraj = 1,
+            rng = _traj_rng(seed, point),
+            pilot_storage..., saveat = tlist,
+            progress_bar = Val(false)
+        )
+        return (; means = CF[_mean(@view sol.expect[mode, 1, tail]) for mode in 1:nmodes], occupations = Float64[_mean(real.(@view sol.expect[nmodes + mode, 1, tail])) for mode in 1:nmodes], collapses = CF[_mean(@view sol.expect[2nmodes + channel, 1, tail]) for channel in eachindex(Crun)], trace_states = point <= nsave ? hcat((CF.(vec(state.data)) for state in sol.states)...) : nothing, trace_means = point <= nsave ? Matrix{CF}(@view sol.expect[1:nmodes, 1, :]) : nothing, trace_occupations = point <= nsave ? Float64.(real.(@view sol.expect[(nmodes + 1):2nmodes, 1, :])) : nothing, jump_times = point <= nsave ? copy(sol.col_times[1]) : nothing, jump_channels = point <= nsave ? copy(sol.col_which[1]) : nothing)
+    end
+    return _run_discovery_indices(relax, nseeds, ensemblealg)
+end
+
 """
     discover_gauges(H, c_ops; <keyword arguments>)
     discover_gauges(hamiltonian, collapse_operators; <keyword arguments>)

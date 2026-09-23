@@ -2,10 +2,9 @@ module DiSLOUTrajectoriesClusteringExt
 
 import Clustering
 import DiSLOUTrajectories
-import DiSLOUTrajectories: _chunk_ranges, _shifted_problem, _traj_rng, _validated_seed
+import DiSLOUTrajectories: _shifted_problem, _validated_seed
 using Distances
-using Distributed: nprocs, pmap
-using QuantumToolbox: coherent, mcsolve, tensor
+using Distributed: nprocs
 using Random: Xoshiro
 using Statistics
 
@@ -63,27 +62,6 @@ function _cluster_terminal_means(
     return (; centers, weights = Float64[record.weight for record in records], counts = Int[record.count for record in records], labels = final_labels)
 end
 
-function _run_discovery_indices(f, nseeds::Int, ensemblealg::Symbol)
-    results = Vector{Any}(undef, nseeds)
-    if ensemblealg === :distributed
-        for (index, result) in pmap(index -> (index, f(index)), 1:nseeds)
-            results[index] = result
-        end
-    elseif ensemblealg === :threads && Threads.nthreads() > 1
-        nchunks = max(1, min(2 * Threads.nthreads(), nseeds))
-        @sync for indices in _chunk_ranges(nseeds, nchunks)
-            Threads.@spawn for index in indices
-                results[index] = f(index)
-            end
-        end
-    else
-        for index in 1:nseeds
-            results[index] = f(index)
-        end
-    end
-    return results
-end
-
 function _trajectory_discovery_inputs(H, c_ops, mode_ops, mode_dims, discovery_time, seed_radii, cluster_scales, step, nseeds, terminal_window, preliminary_shifts, dbscan_radius, min_neighbors, min_weight, save_preliminary_trajectories, ensemblealg)
     nmodes = length(mode_ops)
     nmodes > 0 || throw(ArgumentError("need at least one mode operator"))
@@ -130,19 +108,9 @@ function _run_preliminary_trajectories(
         amplitudes[mode, point] = seed_radii[mode] * sqrt(rand(seed_rng)) * cis(2π * rand(seed_rng))
     end
     nsave = min(save_preliminary_trajectories, nseeds)
-    # QuantumToolbox's retained-run keyword predates DiSLOUTrajectories.
-    pilot_storage = (; Symbol("keep_" * "runs_results") => Val(true))
-    relax = function (point)
-        psi0 = tensor((coherent(Int(mode_dims[mode]), amplitudes[mode, point]) for mode in 1:inputs.nmodes)...)
-        sol = mcsolve(
-            Hrun, psi0, tlist, Crun; e_ops, ntraj = 1,
-            rng = _traj_rng(seed, point),
-            pilot_storage..., saveat = tlist,
-            progress_bar = Val(false)
-        )
-        return (; means = CF[mean(@view sol.expect[mode, 1, tail]) for mode in 1:inputs.nmodes], occupations = Float64[mean(real.(@view sol.expect[inputs.nmodes + mode, 1, tail])) for mode in 1:inputs.nmodes], collapses = CF[mean(@view sol.expect[2inputs.nmodes + channel, 1, tail]) for channel in eachindex(c_ops)], trace_states = point <= nsave ? hcat((CF.(vec(state.data)) for state in sol.states)...) : nothing, trace_means = point <= nsave ? Matrix{CF}(@view sol.expect[1:inputs.nmodes, 1, :]) : nothing, trace_occupations = point <= nsave ? Float64.(real.(@view sol.expect[(inputs.nmodes + 1):2inputs.nmodes, 1, :])) : nothing, jump_times = point <= nsave ? copy(sol.col_times[1]) : nothing, jump_channels = point <= nsave ? copy(sol.col_which[1]) : nothing)
-    end
-    results = _run_discovery_indices(relax, nseeds, ensemblealg)
+    results = DiSLOUTrajectories._preliminary_pilot_results(
+        Hrun, Crun, e_ops, tlist, tail, amplitudes, mode_dims, seed, nsave, ensemblealg
+    )
     terminal_means = Matrix{CF}(undef, inputs.nmodes, nseeds); terminal_occupations = Matrix{Float64}(undef, inputs.nmodes, nseeds); terminal_collapse_means = Matrix{CF}(undef, length(c_ops), nseeds)
     for point in 1:nseeds
         result = results[point]; terminal_means[:, point] = result.means; terminal_occupations[:, point] = result.occupations; terminal_collapse_means[:, point] = result.collapses

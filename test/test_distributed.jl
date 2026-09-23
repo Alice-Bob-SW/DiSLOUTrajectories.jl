@@ -298,6 +298,26 @@ end
                 end
             end
         end
+
+        @testset "distributed trajectory discovery needs no extension on workers" begin
+            # testsetup.jl loads Clustering before addprocs, so the workers never load it.
+            @test !any(
+                remotecall_fetch(
+                    () -> Base.get_extension(DiSLOUTrajectories, :DiSLOUTrajectoriesClusteringExt) !== nothing,
+                    worker
+                ) for worker in workers_added
+            )
+            a = destroy(4)
+            kw = (;
+                method = :trajectories, mode_ops = [a], mode_dims = [4],
+                discovery_time = 0.2, seed_radii = [1.0], cluster_scales = [1.0],
+                step = 0.05, nseeds = 6, min_neighbors = 1, min_weight = 0.0, seed = 3,
+            )
+            distributed = discover_gauges(0.1 * num(4), [a]; kw..., ensemblealg = :distributed)
+            serial = discover_gauges(0.1 * num(4), [a]; kw..., ensemblealg = :serial)
+            @test distributed.shifts == serial.shifts
+            @test distributed.diagnostics.terminal_means == serial.diagnostics.terminal_means
+        end
     finally
         rmprocs(workers_added)
         was_enabled ? DiSLOUTrajectories._enable_cuda_diagonalization!() :
