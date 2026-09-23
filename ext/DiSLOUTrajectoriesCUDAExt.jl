@@ -1,13 +1,14 @@
 module DiSLOUTrajectoriesCUDAExt
 
 using LinearAlgebra
-import CUDA
+import CUDACore
+import cuSOLVER  # provides eigen/lu on CuMatrix and loads cuBLAS for `*`
 import DiSLOUTrajectories
 
-DiSLOUTrajectories._matrix_inf_norm(A::CUDA.CuMatrix) =
+DiSLOUTrajectories._matrix_inf_norm(A::CUDACore.CuMatrix) =
     Float64(maximum(sum(abs, A; dims = 2)))
 
-function DiSLOUTrajectories._identity_metric_error(G::CUDA.CuMatrix)
+function DiSLOUTrajectories._identity_metric_error(G::CUDACore.CuMatrix)
     size(G, 1) == size(G, 2) || return Inf
     Δ = G - I
     return sqrt(
@@ -28,9 +29,9 @@ function DiSLOUTrajectories._cuda_prepare_diagonal_data(
         C::Vector{Matrix{ComplexF64}}, Z::Vector{Matrix{ComplexF64}}
     )
     prepared = DiSLOUTrajectories._prepare_diagonal_data(
-        CUDA.CuArray(H), CUDA.CuArray.(C), CUDA.CuArray.(Z); backend = :cuda
+        CUDACore.CuArray(H), CUDACore.CuArray.(C), CUDACore.CuArray.(Z); backend = :cuda
     )
-    CUDA.synchronize()
+    CUDACore.synchronize()
     return merge(
         prepared, (;
             V = Array(prepared.V),
@@ -46,7 +47,7 @@ function DiSLOUTrajectories._cuda_prepare_diagonal_data(
 end
 
 function __init__()
-    CUDA.functional() && DiSLOUTrajectories._enable_cuda_diagonalization!()
+    CUDACore.functional() && DiSLOUTrajectories._enable_cuda_diagonalization!()
     return nothing
 end
 

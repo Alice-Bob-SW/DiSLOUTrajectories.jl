@@ -47,14 +47,17 @@ Pkg.add("QuantumCumulants")
 using QuantumCumulants
 ```
 
-[```CUDA.jl```](https://cuda.juliagpu.org/stable/) can be installed to perform the initial eigendecomposition and related numerical operations on NVidia GPUs:
+[```CUDA.jl```](https://cuda.juliagpu.org/stable/) can be installed to perform the initial eigendecomposition and related numerical operations on NVidia GPUs.
+The extension only needs the `CUDACore` and `cuSOLVER` components of CUDA.jl:
 
 ```julia
 using Pkg
-Pkg.add("CUDA")
-using CUDA
+Pkg.add(["CUDACore", "cuSOLVER"])
+using CUDACore, cuSOLVER
 using DiSLOUTrajectories
 ```
+
+Loading the full `CUDA` package works too.
 
 When CUDA is functional, the extension prepares the dense diagonal-basis cache
 on the GPU, including normalization, LU factorizations, and diagnostics, then

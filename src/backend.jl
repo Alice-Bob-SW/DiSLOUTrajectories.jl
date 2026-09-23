@@ -12,8 +12,9 @@ Inspect the eigensystem preparation backends available to the current process.
 
 # Notes
 
-- Loading CUDA activates DiSLOUTrajectories.jl's optional CUDA extension. GPU preparation is
-  enabled when `CUDA.functional()` succeeds during extension initialization.
+- Loading CUDACore and cuSOLVER (or all of CUDA) activates DiSLOUTrajectories.jl's
+  optional CUDA extension. GPU preparation is enabled when `CUDACore.functional()`
+  succeeds during extension initialization.
 - CUDA accelerates eigensystem preparation, but trajectory propagation and returned
   arrays remain on the CPU. GPU preparation failures disable CUDA preparation
   in the current process and retry with LAPACK.
@@ -45,7 +46,7 @@ function backend_info()
 end
 
 const _REPORT_EXTENSIONS = (
-    (:DiSLOUTrajectoriesCUDAExt, :CUDA),
+    (:DiSLOUTrajectoriesCUDAExt, :CUDACore, :cuSOLVER),
     (:DiSLOUTrajectoriesClusteringExt, :Clustering, :Distances),
     (:DiSLOUTrajectoriesQuantumCumulantsExt, :QuantumCumulants, :ModelingToolkitBase),
 )
