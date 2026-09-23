@@ -15,13 +15,15 @@ DiSLOUTrajectories.jl depends directly on or optionally integrates with the foll
 
 ## Optional dependencies
 
-| Project                | License |
-| ---------------------- | ------- |
-| CUDA.jl                | MIT     |
-| Clustering.jl          | MIT     |
-| Distances.jl           | MIT     |
-| ModelingToolkitBase.jl | MIT     |
-| QuantumCumulants.jl    | MIT     |
+| Project                 | License |
+| ----------------------- | ------- |
+| CUDA.jl                 | MIT     |
+| Clustering.jl           | MIT     |
+| Distances.jl            | MIT     |
+| ForwardDiff.jl          | MIT     |
+| ModelingToolkitBase.jl  | MIT     |
+| QuantumCumulants.jl     | MIT     |
+| SimpleNonlinearSolve.jl | MIT     |
 
 ## Documentation and test dependencies
 

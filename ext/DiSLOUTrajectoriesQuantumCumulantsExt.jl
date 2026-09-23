@@ -1,19 +1,20 @@
 module DiSLOUTrajectoriesQuantumCumulantsExt
 
+import ForwardDiff
 import ModelingToolkitBase
 import QuantumCumulants
+import SimpleNonlinearSolve
 import DiSLOUTrajectories
 using LinearAlgebra
 
 const MTK = ModelingToolkitBase
 const QC = QuantumCumulants
+const SNS = SimpleNonlinearSolve
 
 const _SEMICLASSICAL_NUMERICAL_POLICY = (
     starts_per_coordinate = 5,
-    finite_difference_scale = 1.0e-6,
-    newton_max_iterations = 80,
+    max_iterations = 80,
     residual_tolerance = 1.0e-10,
-    backtracking_min_scale = 2.0^-20,
     stability_cutoff = -1.0e-8,
     occupation_slack = 1.0e-8,
     deduplication_tolerance = 1.0e-7,
@@ -75,7 +76,7 @@ function _complex_amplitudes(z::AbstractVector{<:Real})
             "phase-space coordinates must contain one real-imaginary pair per mode"
         )
     )
-    return ComplexF64[ComplexF64(z[index], z[index + 1]) for index in 1:2:length(z)]
+    return [complex(z[index], z[index + 1]) for index in 1:2:length(z)]
 end
 
 # Paper: R(x) = (Re F₁, Im F₁, …) (Eq. A.3).
@@ -88,75 +89,25 @@ function _semiclassical_residual(drift, z::AbstractVector{<:Real})
                 "expected $(length(amplitudes))"
         )
     )
-    residual = Vector{Float64}(undef, length(z))
-    for mode in eachindex(values)
-        residual[2mode - 1] = real(values[mode])
-        residual[2mode] = imag(values[mode])
-    end
-    return all(isfinite, residual) ? residual : nothing
+    return collect(Iterators.flatten((real(value), imag(value)) for value in values))
 end
 
-# Paper: J = ∂R/∂x (Eq. A.4), by finite differences.
-function _semiclassical_jacobian(residual, z::Vector{Float64})
+# Paper: x^(g) with R(x^(g)) = 0 (Eqs. A.3–A.4), J = ∂R/∂x by forward-mode AD.
+function _semiclassical_root(residual, seed::Vector{Float64})
     policy = _SEMICLASSICAL_NUMERICAL_POLICY
-    h = policy.finite_difference_scale * (1 + norm(z))
-    dimension = length(z)
-    jacobian = Matrix{Float64}(undef, dimension, dimension)
-    offset = zeros(dimension)
-    for column in 1:dimension
-        offset[column] = h
-        plus = residual(z + offset)
-        minus = residual(z - offset)
-        offset[column] = 0.0
-        (plus === nothing || minus === nothing) && return nothing
-        @views jacobian[:, column] .= (plus .- minus) ./ (2h)
-    end
-    return all(isfinite, jacobian) ? jacobian : nothing
-end
-
-# Paper: x^(g) with R(x^(g)) = 0 (Eqs. A.3–A.4).
-function _semiclassical_newton_root(residual, seed::Vector{Float64})
-    policy = _SEMICLASSICAL_NUMERICAL_POLICY
-    z = copy(seed)
-    for _ in 1:policy.newton_max_iterations
-        value = residual(z)
-        value === nothing && return nothing
-        root_residual = norm(value)
-        root_residual <= policy.residual_tolerance && return z
-        jacobian = _semiclassical_jacobian(residual, z)
-        jacobian === nothing && return nothing
-        direction = try
-            -(jacobian \ value)
-        catch err
-            err isa LinearAlgebra.SingularException || rethrow()
-            return nothing
-        end
-        all(isfinite, direction) || return nothing
-
-        accepted = false
-        step_scale = 1.0
-        while step_scale >= policy.backtracking_min_scale
-            candidate = z + step_scale * direction
-            candidate_value = residual(candidate)
-            if candidate_value !== nothing && norm(candidate_value) < root_residual
-                z = candidate
-                accepted = true
-                break
-            end
-            step_scale /= 2
-        end
-        accepted || return nothing
-    end
-    value = residual(z)
-    return value !== nothing && norm(value) <= policy.residual_tolerance ? z : nothing
+    problem = SNS.NonlinearProblem((z, _) -> residual(z), seed)
+    solution = SNS.solve(
+        problem, SNS.SimpleTrustRegion();
+        abstol = policy.residual_tolerance, maxiters = policy.max_iterations
+    )
+    return norm(residual(solution.u)) <= policy.residual_tolerance ? solution.u : nothing
 end
 
 # Paper: α^(g) and max_ℓ Re λ_ℓ[J(x^(g))] (Eq. A.5).
 function _semiclassical_point(residual, z::Vector{Float64})
     value = residual(z)
-    value === nothing && return nothing
-    jacobian = _semiclassical_jacobian(residual, z)
-    jacobian === nothing && return nothing
+    jacobian = ForwardDiff.jacobian(residual, z)
+    all(isfinite, jacobian) || return nothing
     eigenvalues = try
         eigvals(jacobian)
     catch err
@@ -187,7 +138,7 @@ function _phase_space_candidates(drift, bounds)
     # TODO: Cartesian seeding scales as starts_per_coordinate^(2 * nmodes),
     # replace with configurable multistart sampling when larger systems need it.
     for seed in Iterators.product(seed_axes...)
-        root = _semiclassical_newton_root(residual, Float64[seed...])
+        root = _semiclassical_root(residual, Float64[seed...])
         root === nothing && continue
         amplitudes = _complex_amplitudes(root)
         all(
