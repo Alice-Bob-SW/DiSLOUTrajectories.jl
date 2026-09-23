@@ -5,6 +5,13 @@ using QuantumCumulants
 @testset "extension activation needs only QuantumCumulants" begin
     @test Base.get_extension(DiSLOUTrajectories, :DiSLOUTrajectoriesQuantumCumulantsExt) !== nothing
     @test !isdefined(Main, :ModelingToolkitBase)
+    err = try
+        discover_gauges(nothing, []; method = :semiclassical)
+    catch caught
+        caught
+    end
+    @test err isa MethodError
+    @test !occursin("using QuantumCumulants", sprint(showerror, err))
 end
 
 include("fixtures/two_mode_diamond.jl")

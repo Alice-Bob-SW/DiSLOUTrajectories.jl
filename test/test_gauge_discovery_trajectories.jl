@@ -41,7 +41,7 @@ end
 
 @testset "trajectory clustering breaks equal-weight ties by center" begin
     points = ComplexF64[1 + 2im 1 + 2im 1 + 2im -1 - 2im -1 - 2im -1 - 2im]
-    clusters = SM._cluster_terminal_means(
+    clusters = ClusteringExt._cluster_terminal_means(
         points;
         cluster_scales = [1.0], dbscan_radius = 0.5, min_neighbors = 2,
         min_weight = 0.0
@@ -85,25 +85,16 @@ end
     @test result.diagnostics.preliminary_shifts == preliminary
 end
 
-@testset "semiclassical dispatch is actionable without its extension" begin
+@testset "semiclassical discovery has no method without its extension" begin
     @test Base.get_extension(DiSLOUTrajectories, :DiSLOUTrajectoriesQuantumCumulantsExt) === nothing
-    error = try
-        discover_gauges(identity, sin; method = :semiclassical)
-        nothing
-    catch caught
-        caught
-    end
-    @test error isa ArgumentError
-    @test occursin("QuantumCumulants", sprint(showerror, error))
-    @test occursin("ModelingToolkitBase", sprint(showerror, error))
-    @test_throws MethodError discover_gauges(nothing, Any[]; method = :semiclassical)
+    @test_throws MethodError discover_gauges(identity, sin; method = :semiclassical)
 end
 
 function _sentinel_hamiltonian_constructor() end
 function _sentinel_collapse_constructor() end
 struct _SemiclassicalSentinel <: Exception end
-function DiSLOUTrajectories._discover_gauges_semiclassical(
-        ::typeof(_sentinel_hamiltonian_constructor),
+function DiSLOUTrajectories._discover_gauges(
+        ::Val{:semiclassical}, ::typeof(_sentinel_hamiltonian_constructor),
         ::typeof(_sentinel_collapse_constructor); kwargs...
     )
     throw(_SemiclassicalSentinel())

@@ -9,16 +9,17 @@ using DiSLOUTrajectories
     @test "Distances" ∉ loaded
     @test "QuantumCumulants" ∉ loaded
     @test "ModelingToolkitBase" ∉ loaded
-    trajectory_error = try
-        DiSLOUTrajectories._cluster_terminal_means(
-            zeros(ComplexF64, 1, 0);
-            cluster_scales = [1.0], dbscan_radius = 1.5,
-            min_neighbors = 1, min_weight = 0.0,
+    for (method, hint) in (
+            :trajectories => "using Clustering",
+            :semiclassical => "using QuantumCumulants",
+            :unknown => "Unsupported gauge discovery method :unknown",
         )
-        nothing
-    catch caught
-        caught
+        err = try
+            discover_gauges(nothing, []; method)
+        catch caught
+            caught
+        end
+        @test err isa MethodError
+        @test occursin(hint, sprint(showerror, err))
     end
-    @test trajectory_error isa ArgumentError
-    @test occursin("Clustering", sprint(showerror, trajectory_error))
 end

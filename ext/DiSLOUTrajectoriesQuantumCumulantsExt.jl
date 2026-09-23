@@ -170,8 +170,8 @@ _point_matrix(points, nmodes) = isempty(points) ? zeros(ComplexF64, nmodes, 0) :
     hcat((point.amplitudes for point in points)...)
 
 # Paper: ζ_μ^(g) = -C_{μ,sc}(α^(g), α^(g)*) (Eq. A.6).
-function _discover_gauges_semiclassical(
-        hamiltonian::Function, collapse_operators::Function;
+function DiSLOUTrajectories._discover_gauges(
+        ::Val{:semiclassical}, hamiltonian::Function, collapse_operators::Function;
         limits, parameters = ()
     )
     bounds = _semiclassical_limits(limits)

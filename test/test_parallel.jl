@@ -96,12 +96,12 @@ end
     expected = Any[index^2 for index in 1:8]
     nested = Vector{Any}(undef, 2)
     Threads.@threads :static for run in eachindex(nested)
-        nested[run] = DiSLOUTrajectories._run_discovery_indices(index -> index^2, 8, :threads)
+        nested[run] = ClusteringExt._run_discovery_indices(index -> index^2, 8, :threads)
     end
     overlapping = Vector{Any}(undef, 2)
     @sync for run in eachindex(overlapping)
         Threads.@spawn overlapping[run] =
-            DiSLOUTrajectories._run_discovery_indices(index -> index^2, 8, :threads)
+            ClusteringExt._run_discovery_indices(index -> index^2, 8, :threads)
     end
 
     @test all(==(expected), nested)

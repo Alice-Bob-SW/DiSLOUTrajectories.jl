@@ -8,6 +8,7 @@ using SparseArrays
 using Statistics
 
 const SM = DiSLOUTrajectories
+const ClusteringExt = Base.get_extension(SM, :DiSLOUTrajectoriesClusteringExt)
 
 # Paper: s(t) = ‖exp(-i H_eff t)|ψ(0)⟩‖² (Eq. 5).
 direct_survival(Heff::AbstractMatrix, psi::AbstractVector, time::Real) =

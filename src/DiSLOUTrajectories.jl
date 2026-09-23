@@ -18,7 +18,6 @@ using LinearAlgebra
 using Random
 using Distributed
 using SparseArrays
-using Statistics
 
 export dislou_solve, discover_gauges, DiSLOUSolution, expect_mean, expect_sem
 export FirstPassageConvergenceError, about, backend_info, cite, versioninfo
@@ -37,5 +36,7 @@ include("layer3.jl")
 include("ensemble.jl")
 include("result.jl")
 include("solve.jl")
+
+__init__() = Base.Experimental.register_error_hint(_discovery_error_hint, MethodError)
 
 end # module
