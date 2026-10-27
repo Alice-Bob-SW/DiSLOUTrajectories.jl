@@ -10,6 +10,7 @@ TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 [compat]
 CairoMakie = "0.15"
 Clustering = "0.15"
+DiSLOUTrajectories = "0.1.0"
 Documenter = "1"
 QuantumCumulants = "0.7"
 QuantumToolbox = "0.47, 0.48"
